@@ -76,28 +76,45 @@ def token_required(f):
 
 @app.route("/login", methods=["POST"])
 def login():
-    data = request.get_json(force=True)
-    username = data.get("username")
-    password = data.get("password")
-    if username == TESTE_USERNAME and password == TESTE_PASSWORD:
-        token = create_token(username)
-        return jsonify({"token": token})
-    else:
-        return jsonify({"error": "Invalid username or password"}), 401
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Invalid JSON or missing data"}), 400
+        
+        username = data.get("username")
+        password = data.get("password")
+        
+        if not username or not password:
+            return jsonify({"error": "Username and password are required"}), 400
+        
+        if username == TESTE_USERNAME and password == TESTE_PASSWORD:
+            token = create_token(username)
+            return jsonify({"token": token})
+        else:
+            return jsonify({"error": "Invalid username or password"}), 401
+    except Exception as e:
+        logger.error(f"Error in login: {str(e)}")
+        return jsonify({"error": "Invalid request format"}), 400
 
 
 @app.route("/predict", methods=["POST"])
 @token_required
 def predict():
     try:
-        data = request.get_json(force=True)
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Invalid JSON or missing data"}), 400
+        
         sepal_length = data.get("sepal_length")
         sepal_width = data.get("sepal_width")
         petal_length = data.get("petal_length")
         petal_width = data.get("petal_width")
         
+        if None in [sepal_length, sepal_width, petal_length, petal_width]:
+            return jsonify({"error": "Missing required fields: sepal_length, sepal_width, petal_length, petal_width"}), 400
+        
         if not all(isinstance(x, (int, float)) for x in [sepal_length, sepal_width, petal_length, petal_width]):
-            return jsonify({"error": "Invalid input data"}), 400
+            return jsonify({"error": "Invalid input data. All fields must be numbers"}), 400
         
         features = [sepal_length, sepal_width, petal_length, petal_width]
         
