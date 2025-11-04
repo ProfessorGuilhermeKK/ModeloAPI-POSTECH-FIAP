@@ -20,7 +20,13 @@ TESTE_PASSWORD = "admin123"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DB_URL = "sqlite:///predictions.db"
+# Configurar banco de dados para Vercel (usar /tmp para escrita)
+if os.environ.get("VERCEL"):
+    DB_PATH = "/tmp/predictions.db"
+else:
+    DB_PATH = "predictions.db"
+
+DB_URL = f"sqlite:///{DB_PATH}"
 engine = create_engine(DB_URL, echo=False)
 Base = declarative_base()
 SessionLocal = sessionmaker(bind=engine)
@@ -37,13 +43,43 @@ class Prediction(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    logger.warning(f"Database initialization warning: {str(e)}")
 
-model = joblib.load("iris_model.pkl")
-logger.info("Model loaded successfully")
+# Carregar modelo de forma lazy
+model = None
+predictions_cache = {}
+
+def load_model():
+    global model
+    if model is None:
+        try:
+            # Tentar diferentes caminhos para o modelo
+            model_paths = [
+                "iris_model.pkl",
+                os.path.join(os.path.dirname(__file__), "iris_model.pkl"),
+                "/var/task/iris_model.pkl",  # Caminho comum no Vercel
+            ]
+            
+            model_loaded = False
+            for path in model_paths:
+                if os.path.exists(path):
+                    model = joblib.load(path)
+                    logger.info(f"Model loaded successfully from {path}")
+                    model_loaded = True
+                    break
+            
+            if not model_loaded:
+                raise FileNotFoundError("iris_model.pkl not found in any expected location")
+                
+        except Exception as e:
+            logger.error(f"Error loading model: {str(e)}")
+            raise
+    return model
 
 app = Flask(__name__)
-predictions_cache = {}
 
 
 def create_token(username):
@@ -118,6 +154,9 @@ def predict():
         
         features = [sepal_length, sepal_width, petal_length, petal_width]
         
+        # Carregar modelo se necessário
+        model = load_model()
+        
         # Verificar cache
         features_tuple = tuple(features)
         if features_tuple in predictions_cache:
@@ -179,8 +218,26 @@ def list_predictions():
     return jsonify(results)
 
 
-# Handler para Vercel
-handler = app
+@app.route("/", methods=["GET"])
+def health_check():
+    """Health check endpoint"""
+    try:
+        loaded_model = load_model()
+        return jsonify({
+            "status": "ok",
+            "message": "API is running",
+            "model_loaded": loaded_model is not None
+        })
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": f"Model not loaded: {str(e)}"
+        }), 500
+
+
+# Handler para Vercel - exporta o app Flask diretamente
+# O Vercel Python runtime automaticamente adapta o app Flask
 
 if __name__ == "__main__":
     app.run(debug=True)
